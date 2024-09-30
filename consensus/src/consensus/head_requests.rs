@@ -12,8 +12,11 @@ use nimiq_block::Block;
 use nimiq_blockchain_interface::AbstractBlockchain;
 use nimiq_blockchain_proxy::BlockchainProxy;
 use nimiq_hash::Blake2bHash;
-use nimiq_network_interface::{network::Network, request::RequestError};
-use nimiq_utils::stream::FuturesUnordered;
+use nimiq_network_interface::{
+    network::{CloseReason, Network},
+    request::RequestError,
+};
+use nimiq_utils::{spawn, stream::FuturesUnordered};
 
 use crate::messages::{BlockError, RequestBlock, RequestHead, ResponseHead};
 
@@ -28,6 +31,7 @@ pub struct HeadRequests<TNetwork: Network + 'static> {
             (
                 Result<Result<Block, BlockError>, RequestError>,
                 TNetwork::PeerId,
+                Blake2bHash,
             ),
         >,
     >,
@@ -129,9 +133,15 @@ impl<TNetwork: Network + 'static> Future for HeadRequests<TNetwork> {
                             self.head_blocks.push(
                                 async move {
                                     (
-                                        Self::request_block(network, peer_id, hash, include_body)
-                                            .await,
+                                        Self::request_block(
+                                            network,
+                                            peer_id,
+                                            hash.clone(),
+                                            include_body,
+                                        )
+                                        .await,
                                         peer_id,
+                                        hash,
                                     )
                                 }
                                 .boxed(),
@@ -148,15 +158,30 @@ impl<TNetwork: Network + 'static> Future for HeadRequests<TNetwork> {
         // Then poll blocks.
         while let Poll::Ready(Some(result)) = self.head_blocks.poll_next_unpin(cx) {
             match result {
-                (Ok(Ok(block)), peer_id) => {
-                    self.unknown_blocks.push((block, peer_id));
+                (Ok(Ok(mut block)), peer_id, requested_hash) => {
+                    if requested_hash == block.hash_cached() {
+                        self.unknown_blocks.push((block, peer_id));
+                    } else {
+                        warn!(%peer_id,
+                            "Banning peer due to wrong reply to request block",
+                        );
+                        let network = Arc::clone(&self.network);
+                        // We disconnect from this peer
+                        spawn(Box::pin({
+                            async move {
+                                network
+                                    .disconnect_peer(peer_id, CloseReason::MaliciousPeer)
+                                    .await;
+                            }
+                        }));
+                    }
                 }
                 // We don't do anything with failed requests.
-                (Ok(Err(error)), peer_id) => {
-                    trace!(%error, %peer_id, "Block request failed on remote side");
+                (Ok(Err(error)), peer_id, requested_hash) => {
+                    trace!(%error, %peer_id,%requested_hash, "Block request failed on remote side");
                 }
-                (Err(error), peer_id) => {
-                    trace!(%error, %peer_id, "Failed block request");
+                (Err(error), peer_id, requested_hash) => {
+                    trace!(%error, %peer_id, %requested_hash,"Failed block request");
                 }
             }
         }
