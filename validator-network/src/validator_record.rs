@@ -17,6 +17,8 @@ where
 {
     /// Validator Peer ID
     pub peer_id: TPeerId,
+    ///
+    // pub validator_address: Address,
     /// Record timestamp in milliseconds since 1970-01-01 00:00:00 UTC, excluding leap seconds (Unix time)
     pub timestamp: u64,
 }

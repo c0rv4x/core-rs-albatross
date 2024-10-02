@@ -44,8 +44,14 @@ pub struct PeerContact {
     /// Services supported by this peer.
     pub services: Services,
 
-    /// Timestamp when this peer contact was created in *seconds* since unix epoch. `None` if this is a seed.
-    pub timestamp: Option<u64>,
+    /// Timestamp when this peer contact was created in *seconds* since unix epoch.
+    timestamp: u64,
+
+    /// Identifies this record as a seed node. Seed nodes records will not be send during discovery
+    /// and they will never be pruned because of old age.
+    /// Seed nodes may put any timestamp, as it has no consequence.
+    #[serde(skip, default)]
+    seed: bool,
 }
 
 impl PeerContact {
@@ -56,7 +62,8 @@ impl PeerContact {
         advertised_addresses: I,
         public_key: PublicKey,
         services: Services,
-        timestamp: Option<u64>,
+        timestamp: u64,
+        seed: bool,
     ) -> Result<Self, PeerContactError> {
         let mut addresses = advertised_addresses.into_iter().collect::<Vec<Multiaddr>>();
         if addresses.len() > Self::MAX_ADDRESSES {
@@ -70,17 +77,22 @@ impl PeerContact {
             public_key,
             services,
             timestamp,
+            seed,
         })
     }
 
-    /// Returns whether this is a seed peer contact. See [`PeerContact::timestamp`].
+    /// Returns whether this is a seed peer contact.
     pub fn is_seed(&self) -> bool {
-        self.timestamp.is_none()
+        self.seed
     }
 
     /// Derives the peer ID from the public key
     pub fn peer_id(&self) -> PeerId {
         self.public_key.clone().to_peer_id()
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
     }
 
     /// Signs this peer contact.
@@ -104,12 +116,10 @@ impl PeerContact {
 
     /// This sets the timestamp in the peer contact to the current system time.
     pub fn set_current_time(&mut self) {
-        self.timestamp = Some(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
+        self.timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
     }
 
     /// Adds a set of addresses
@@ -247,15 +257,20 @@ impl PeerContactInfo {
 
     /// Returns whether this is a seed contact.
     pub fn is_seed(&self) -> bool {
-        self.contact.inner.timestamp.is_none()
+        self.contact.inner.is_seed()
     }
     /// Returns whether the peer contact exceeds its age limit
     pub fn exceeds_age(&self, max_age: Duration, unix_time: Duration) -> bool {
-        if let Some(timestamp) = self.contact.inner.timestamp {
-            if let Some(age) = unix_time.checked_sub(Duration::from_secs(timestamp)) {
-                return age > max_age;
-            }
+        // Seeds peer contacts never expire.
+        if self.is_seed() {
+            return false;
         }
+
+        if let Some(age) = unix_time.checked_sub(Duration::from_secs(self.contact.inner.timestamp))
+        {
+            return age > max_age;
+        }
+
         false
     }
 
@@ -326,12 +341,10 @@ impl PeerContactBook {
         }
 
         log::debug!(peer_id = %contact.peer_id(), addresses = ?contact.inner.addresses, "Adding peer contact");
-        let current_ts = Some(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
+        let current_ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let info = PeerContactInfo::from(contact);
         let peer_id = info.peer_id;

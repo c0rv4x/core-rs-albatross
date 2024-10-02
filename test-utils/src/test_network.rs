@@ -1,6 +1,7 @@
 use std::{num::NonZeroU8, sync::Arc};
 
 use async_trait::async_trait;
+use instant::SystemTime;
 use nimiq_hash::Blake2bHash;
 use nimiq_network_interface::{network::Network as NetworkInterface, peer_info::Services};
 use nimiq_network_libp2p::{
@@ -59,7 +60,11 @@ impl TestNetwork for Network {
             vec![peer_address.clone()],
             peer_key.public(),
             Services::all(),
-            None,
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            true,
         )
         .expect("Could not create peer contact");
         peer_contact.set_current_time();
