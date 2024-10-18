@@ -2,9 +2,6 @@ name: Build + Test
 
 on:
   push:
-    branches:
-      - albatross
-      - testnet
   pull_request:
   merge_group:
   workflow_dispatch:
@@ -15,6 +12,9 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    - name: CLA assistant lite
+      uses: contributor-assistant/github-action@v2.6.1
+  
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
       with:
